@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Teste PTT LiveKit</title>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+      background: #f4f4f4;
+    }
+
+    h1 {
+      margin-bottom: 10px;
+    }
+
+    .card {
+      background: white;
+      padding: 16px;
+      border-radius: 10px;
+      max-width: 900px;
+      margin-bottom: 16px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+
+    label {
+      display: block;
+      margin-top: 10px;
+      font-weight: bold;
+    }
+
+    input {
+      padding: 10px;
+      width: 100%;
+      max-width: 400px;
+      margin-top: 4px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+    }
+
+    button {
+      padding: 12px 18px;
+      margin-top: 12px;
+      margin-right: 8px;
+      cursor: pointer;
+      border: none;
+      border-radius: 6px;
+      background: #222;
+      color: white;
+      font-weight: bold;
+    }
+
+    button:hover {
+      background: #444;
+    }
+
+    #pttButton {
+      background: #c40000;
+      font-size: 18px;
+      padding: 18px 28px;
+      border-radius: 50px;
+    }
+
+    #pttButton.falando {
+      background: #008f39;
+    }
+
+    #status {
+      font-weight: bold;
+      margin-top: 10px;
+      color: #333;
+    }
+
+    #log {
+      background: #111;
+      color: #00ff88;
+      padding: 12px;
+      border-radius: 8px;
+      max-width: 900px;
+      height: 320px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      font-family: monospace;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Teste PTT LiveKit</h1>
+
+  <div class="card">
+    <label>Nome do usuário</label>
+    <input id="usuarioInput" value="usuario_teste_1">
+
+    <label>Canal</label>
+    <input id="canalInput" value="canal-geral">
+
+    <br>
+
+    <button onclick="conectar()">Conectar no Canal</button>
+
+    <button
+      id="pttButton"
+      onmousedown="ativarPTT()"
+      onmouseup="desativarPTT()"
+      onmouseleave="desativarPTT()"
+      ontouchstart="ativarPTT()"
+      ontouchend="desativarPTT()"
+    >
+      APERTE PARA FALAR
+    </button>
+
+    <div id="status">Status: aguardando conexão</div>
+  </div>
+
+  <pre id="log">Aguardando ação...</pre>
+
+  <script type="module">
+    import { Room, createLocalAudioTrack } from "https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.esm.mjs";
+
+    let room;
+    let audioTrack;
+    let pttAtivo = false;
+    let heartbeatInterval = null;
+    let usuario = null;
+    let canal = null;
+
+    const API_URL = "https://api.ipushvoice.pro";
+
+    function setStatus(msg) {
+      document.getElementById("status").textContent = "Status: " + msg;
+    }
+
+    function log(msg) {
+      const logBox = document.getElementById("log");
+
+      if (logBox.textContent === "Aguardando ação...") {
+        logBox.textContent = "";
+      }
+
+      logBox.textContent += msg + "\n";
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    async function postJson(url, body) {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(body)
+      });
+
+      const data = await response.json();
+
+      return {
+        ok: response.ok,
+        status: response.status,
+        data
+      };
+    }
+
+    window.conectar = async function () {
+      try {
+        usuario = document.getElementById("usuarioInput").value.trim();
+        canal = document.getElementById("canalInput").value.trim();
+
+        if (!usuario || !canal) {
+          log("Informe usuário e canal.");
+          return;
+        }
+
+        setStatus("solicitando token");
+        log("Solicitando token para " + usuario + " no canal " + canal + "...");
+
+        const response = await fetch(`${API_URL}/livekit/token`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            identity: usuario,
+            room: canal,
+            name: usuario
+          })
+        });
+
+        const data = await response.json();
+
+        log("Token recebido.");
+        setStatus("conectando no LiveKit");
+
+        room = new Room();
+
+        room.on("trackSubscribed", (track) => {
+          if (track.kind === "audio") {
+            const element = track.attach();
+            document.body.appendChild(element);
+            log("Áudio remoto recebido.");
+          }
+        });
+
+        await room.connect(data.url, data.token);
+
+        log("Conectado no canal: " + canal);
+
+        audioTrack = await createLocalAudioTrack();
+        await room.localParticipant.publishTrack(audioTrack);
+        await audioTrack.mute();
+
+        setStatus("conectado como " + usuario + " no canal " + canal);
+        log("Microfone preparado e mutado.");
+      } catch (error) {
+        setStatus("erro ao conectar");
+        log("ERRO ao conectar: " + error.message);
+        console.error(error);
+      }
+    };
+
+    window.ativarPTT = async function () {
+      try {
+        if (!audioTrack) {
+          log("Conecte primeiro.");
+          return;
+        }
+
+        if (pttAtivo) return;
+
+        log("Solicitando permissão PTT...");
+
+        const result = await postJson(`${API_URL}/ptt/request`, {
+          channel: canal,
+          identity: usuario
+        });
+
+        if (!result.ok || !result.data.allowed) {
+          log("Canal ocupado por: " + (result.data.speaker || "desconhecido"));
+          setStatus("canal ocupado por " + (result.data.speaker || "desconhecido"));
+          return;
+        }
+
+        await audioTrack.unmute();
+        pttAtivo = true;
+
+        document.getElementById("pttButton").classList.add("falando");
+        setStatus("falando");
+        log("PTT liberado. Falando...");
+
+        heartbeatInterval = setInterval(async () => {
+          try {
+            const hb = await postJson(`${API_URL}/ptt/heartbeat`, {
+              channel: canal,
+              identity: usuario
+            });
+
+            if (!hb.ok || !hb.data.renewed) {
+              log("Falha ao renovar PTT. Microfone será desligado.");
+              await desativarPTT();
+            } else {
+              log("PTT renovado.");
+            }
+          } catch (error) {
+            log("Erro no heartbeat PTT.");
+            await desativarPTT();
+          }
+        }, 5000);
+      } catch (error) {
+        setStatus("erro ao ativar PTT");
+        log("ERRO ao ativar PTT: " + error.message);
+        console.error(error);
+      }
+    };
+
+    window.desativarPTT = async function () {
+      try {
+        if (!audioTrack || !pttAtivo) return;
+
+        await audioTrack.mute();
+        pttAtivo = false;
+
+        document.getElementById("pttButton").classList.remove("falando");
+
+        if (heartbeatInterval) {
+          clearInterval(heartbeatInterval);
+          heartbeatInterval = null;
+        }
+
+        await postJson(`${API_URL}/ptt/release`, {
+          channel: canal,
+          identity: usuario
+        });
+
+        setStatus("conectado - aguardando fala");
+        log("PTT liberado. Microfone desligado.");
+      } catch (error) {
+        setStatus("erro ao desativar PTT");
+        log("ERRO ao desativar PTT: " + error.message);
+        console.error(error);
+      }
+    };
+  </script>
+</body>
+</html>

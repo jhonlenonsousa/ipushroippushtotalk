@@ -1,0 +1,40 @@
+services:
+  redis:
+    image: redis:7
+    container_name: ptt_redis
+    restart: always
+
+  postgres:
+    image: postgres:16
+    container_name: ptt_postgres
+    restart: always
+    environment:
+      POSTGRES_DB: ptt
+      POSTGRES_USER: ptt_user
+      POSTGRES_PASSWORD: ptt735941
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: ptt_livekit
+    restart: always
+    command: --dev --bind 0.0.0.0
+    network_mode: host
+
+  backend:
+    build: ./backend
+    container_name: ptt_backend
+    restart: always
+    env_file:
+      - ./backend/.env
+    ports:
+      - "3000:3000"
+    depends_on:
+      - redis
+      - postgres
+
+volumes:
+  postgres_data:
